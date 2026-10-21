@@ -49,7 +49,17 @@ Part 2 works with any foliage, including models without wind data.
 - **Wind weight.** It is `1 - day prelight alpha`, as in SkyGfx Extended. On those meshes the alpha is not opacity, so the shaders force it to 1.
 - **Dual pass.** A stub in RenderHook's alpha-mesh push stores per-mesh flags in the entry's padding. Dual-pass meshes are also sent to the G-buffer draw, and the forward alpha-list callback sets each mesh's own `b12`.
 
-Source: `src/RHWind.cpp`. Build with `build.bat` (Visual Studio 2019/2022 or Build Tools, x86).
+Source: `src/RHWind.cpp` and `src/SAProcObjLimit.cpp`. Build with `build.bat` (Visual Studio 2019/2022 or Build Tools, x86).
+
+## Also included: SAProcObjLimit (procedural object limit)
+
+`scripts\SAProcObjLimit.asi` is a separate, optional plugin that works with or without RenderHook. It fixes a crash you can get with vegetation mods.
+
+The game has room for **128** procedural object types: the bushes, weeds, rocks and cacti it scatters on grass, sand and pavement, listed in `data\procobj.dat`. Modloader merges the `procobj.dat` files of all your mods. *BSOR 5 Stars Vegetation* and *Sidewalk Weeds* together, for example, come to 137. The game loads the extra lines without any check, writes them over its list of spawned objects, and later crashes at `0x5A3FA6` when it removes ground objects near the affected surfaces.
+
+SAProcObjLimit moves that part of the game's memory to a buffer with room for **512** types and updates every place in the game code that uses it. It writes `SAProcObjLimit.log`: check that the limit was raised to 512 and that the number of types loaded is what you expect. If any place it patches doesn't hold the expected value (another mod patching there, or not the 1.0 US exe), it changes nothing and says so in the log.
+
+Install: copy `scripts\SAProcObjLimit.asi` into the game's `scripts` folder.
 
 ## Credits
 

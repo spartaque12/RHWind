@@ -1,5 +1,5 @@
 @echo off
-rem Builds RHWind.asi (x86, static CRT) with Visual Studio 2019/2022 or Build Tools into bin\.
+rem Builds RHWind.asi and SAProcObjLimit.asi (x86, static CRT) with Visual Studio 2019/2022 or Build Tools into bin\.
 setlocal
 set "PATH=%PATH%;%ProgramFiles(x86)%\Microsoft Visual Studio\Installer"
 for /f "delims=" %%i in ('vswhere -latest -products * -property installationPath') do set "VSDIR=%%i"
@@ -10,4 +10,6 @@ if not exist bin mkdir bin
 if not exist obj mkdir obj
 cl /nologo /O2 /MT /EHsc /std:c++17 /DNDEBUG /W4 /LD /Foobj\ src\RHWind.cpp /Fe:bin\RHWind.asi /link /IMPLIB:obj\RHWind.lib user32.lib || exit /b 1
 del /q bin\*.exp 2>nul
-echo built bin\RHWind.asi
+cl /nologo /O2 /MT /EHsc /std:c++17 /DNDEBUG /W4 /LD /Foobj\ src\SAProcObjLimit.cpp /Fe:bin\SAProcObjLimit.asi /link /IMPLIB:obj\SAProcObjLimit.lib || exit /b 1
+del /q bin\*.exp 2>nul
+echo built bin\RHWind.asi and bin\SAProcObjLimit.asi
