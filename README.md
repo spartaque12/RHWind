@@ -49,7 +49,7 @@ Part 2 works with any foliage, including models without wind data.
 - **Wind weight.** It is `1 - day prelight alpha`, as in SkyGfx Extended. On those meshes the alpha is not opacity, so the shaders force it to 1.
 - **Dual pass.** A stub in RenderHook's alpha-mesh push stores per-mesh flags in the entry's padding. Dual-pass meshes are also sent to the G-buffer draw, and the forward alpha-list callback sets each mesh's own `b12`.
 
-Source: `src/RHWind.cpp` and `src/SAProcObjLimit.cpp`. Build with `build.bat` (Visual Studio 2019/2022 or Build Tools, x86).
+Source: `src/RHWind.cpp`, `src/SAProcObjLimit.cpp` and `src/RHGrass.cpp`. Build with `build.bat` (Visual Studio 2019/2022 or Build Tools, x86).
 
 ## Also included: SAProcObjLimit (procedural object limit)
 
@@ -60,6 +60,26 @@ The game has room for **128** procedural object types: the bushes, weeds, rocks 
 SAProcObjLimit moves that part of the game's memory to a buffer with room for **512** types and updates every place in the game code that uses it. It writes `SAProcObjLimit.log`: check that the limit was raised to 512 and that the number of types loaded is what you expect. If any place it patches doesn't hold the expected value (another mod patching there, or not the 1.0 US exe), it changes nothing and says so in the log.
 
 Install: copy `scripts\SAProcObjLimit.asi` into the game's `scripts` folder.
+
+## Also included: RHGrass (grass under RenderHook)
+
+`scripts\RHGrass.asi` is a separate, optional plugin. RenderHook doesn't draw the game's grass at all: the call is commented out in its source. RHGrass adds it back, after RenderHook's forward pass. It needs RenderHook (same 2021-09-11 build) but not RHWind.
+
+Turning the call back on isn't enough, for two reasons:
+
+- **Every tuft in one spot.** The game draws all grass of one type through a single model and moves it before each tuft. RenderHook only uploads a new world matrix when the matrix *pointer* changes, and here it never does, so every tuft was drawn where the first one was. RHGrass makes RenderHook upload the matrix for every tuft.
+- **Invisible grass.** The grass colour from `data\plants.dat` has a low alpha (about 40/255), which the game blends softly. RenderHook's shader drops every pixel below 30% opacity, so all of it was discarded. RHGrass multiplies the alpha before it's applied.
+
+Grass only appears with the game's effects quality set above Low, as in the unmodded game.
+
+Install: copy `scripts\RHGrass.asi` and `scripts\RHGrass.ini` into the game's `scripts` folder. `RHGrass.log` shows what was patched. If RenderHook or the game code isn't what it expects, it patches nothing and says so in the log.
+
+| Key (`RHGrass.ini`) | Default | Meaning |
+| --- | --- | --- |
+| `Enabled` | 1 | Draw grass at start. |
+| `ToggleKey` | 0x77 (F8) | Switches grass on and off while playing. Windows virtual-key code, 0 = none. |
+| `AlphaScale` | 6 | Multiplies the grass alpha from `plants.dat`. Below about 2 the grass disappears again. |
+| `ColourScale` | 1 | Multiplies the grass colour. The grass is drawn unlit, so raise it if it looks too dark. |
 
 ## Credits
 
