@@ -15,9 +15,20 @@ cbuffer WindBuffer : register( b12 )
 
 // Dual pass (RHWind.ini [DualPass]): the G-buffer pass keeps the pixels at or above the cutoff, opaque, and the
 // forward pass of the same mesh blends only the pixels below it. Both passes must see the same alpha and cutoff.
+// The cutoff and pass come from RHWind (b12) or from RenderHook itself (UseDualPassForAlphaObjects, PerMaterialBuffer).
+float DualPassBaseCutoff()
+{
+    return max( vAlphaPass.y, fAlphaCutoff );
+}
+
+bool DualPassBlendedPass()
+{
+    return vAlphaPass.x > 0.5f || fAlphaBlendPass > 0.5f;
+}
+
 bool DualPassGBuffer()
 {
-    return vAlphaPass.y > 0.0f;
+    return DualPassBaseCutoff() > 0.0f;
 }
 
 // Lower mips average the leaves away; boosting alpha with the mip level keeps distant foliage's coverage.
@@ -30,8 +41,8 @@ float DualPassAlpha( float alpha, float mip )
 float DualPassCutoff( float viewDepth )
 {
     if ( vAlphaPass.w <= vAlphaPass.z )
-        return vAlphaPass.y;
-    return lerp( vAlphaPass.y, 1.01f, saturate( ( viewDepth - vAlphaPass.z ) / ( vAlphaPass.w - vAlphaPass.z ) ) );
+        return DualPassBaseCutoff();
+    return lerp( DualPassBaseCutoff(), 1.01f, saturate( ( viewDepth - vAlphaPass.z ) / ( vAlphaPass.w - vAlphaPass.z ) ) );
 }
 
 // Distant dither (RHWind.ini [DualPass] DitherStart/DitherEnd): far foliage goes to the G-buffer as a screen-door
@@ -61,7 +72,7 @@ bool DualPassKeepInGBuffer( float rawAlpha, float mip, float viewDepth, float2 p
 
 bool DualPassSkipForward( float rawAlpha, float mip, float viewDepth, float2 pixel )
 {
-    if ( vAlphaPass.x < 0.5f )
+    if ( !DualPassBlendedPass() )
         return false;
     return DualPassDistant( pixel, viewDepth ) || DualPassKeepInGBuffer( rawAlpha, mip, viewDepth, pixel );
 }

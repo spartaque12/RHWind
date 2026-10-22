@@ -1,5 +1,9 @@
 // RHWind - vegetation wind for gtaRenderHook, compatible with models made for SkyGfx Extended's wind shader
-// (e.g. "BSOR 5 Stars - Wind Shader Adapted"). GTA SA 1.0 US, _gtaRenderHook.asi build of 2021-09-11.
+// (e.g. "BSOR 5 Stars - Wind Shader Adapted"). GTA SA 1.0 US.
+//
+// With a RenderHook that exports RHSetBuildingDrawCallback (RenderHookAPI.h) the plugin only registers a callback:
+// RenderHook calls it before every building draw, and draws dual-pass foliage itself (UseDualPassForAlphaObjects).
+// For the 2021-09-11 release, which has no such export, it hooks that binary as described below.
 //
 // SkyGfx Extended marks the meshes that sway with RenderWare atomic plugin 0xEDED (low byte 1 = wind) and uses
 // 1 - (day prelight alpha) as the per-vertex amount. RenderHook keeps the day prelight colour in its building
@@ -28,6 +32,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <share.h>
+#include "RenderHookAPI.h"
 
 namespace {
 
@@ -308,10 +313,36 @@ bool WrapRenderSites(const uintptr_t* sites, int count, RenderCB& original, Rend
     return true;
 }
 
+// RenderHook with RHSetBuildingDrawCallback: wind values for every building draw, in every pass. Wind meshes keep
+// their wind weight in the prelight alpha, so they tell RenderHook it isn't opacity (they can then use its dual pass).
+unsigned int __cdecl BuildingDrawCallback(const RHBuildingDraw* draw)
+{
+    if (!draw || draw->size < sizeof(RHBuildingDraw) || !draw->context) return 0;
+    if (!g_device) {
+        g_context = draw->context;
+        draw->context->GetDevice(&g_device);   // kept for the session
+        Log("using RenderHook's D3D11 device %p", g_device);
+    }
+    const bool wind = draw->atomic && HasWind(draw->atomic);
+    SetWindBuffer(wind, wind && draw->worldMatrix ? draw->worldMatrix + 12 : nullptr, false);
+    return wind ? RH_DRAW_VERTEX_ALPHA_IS_NOT_OPACITY : 0;
+}
+
 void InstallRenderHookParts()
 {
     auto* rh = reinterpret_cast<uint8_t*>(GetModuleHandleA("_gtaRenderHook.asi"));
     if (!rh) { Log("_gtaRenderHook.asi not loaded - nothing to do"); return; }
+    typedef void(__cdecl* SetDrawCallbackFn)(RHBuildingDrawCallback);
+    if (auto setCallback = reinterpret_cast<SetDrawCallbackFn>(GetProcAddress(reinterpret_cast<HMODULE>(rh), "RHSetBuildingDrawCallback"))) {
+        // RenderHook draws dual pass itself; [DualPass] settings are for the 2021 release only
+        g_dualPass = false;
+        g_fadeStart = g_fadeEnd = 0.0f;
+        g_mipBoost = 0.0f;
+        g_ditherStart = g_ditherEnd = 0.0f;
+        setCallback(&BuildingDrawCallback);
+        Log("registered with RenderHook's building draw callback; dual pass is RenderHook's (UseDualPassForAlphaObjects)");
+        return;
+    }
     const auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(rh + reinterpret_cast<IMAGE_DOS_HEADER*>(rh)->e_lfanew);
     const size_t rhSize = nt->OptionalHeader.SizeOfImage;
 
@@ -367,7 +398,7 @@ BOOL WINAPI DllMain(HMODULE mod, DWORD reason, LPVOID)
         GetModuleFileNameA(mod, path, MAX_PATH);
         if (char* dot = strrchr(path, '.')) strcpy_s(dot, path + MAX_PATH - dot, ".log");
         g_log = _fsopen(path, "w", _SH_DENYNO);
-        Log("RHWind 1.2");
+        Log("RHWind 1.5");
         if (char* dot = strrchr(path, '.')) strcpy_s(dot, path + MAX_PATH - dot, ".ini");
         g_dualPass = GetPrivateProfileIntA("DualPass", "Enabled", 1, path) != 0;
         char cutoff[32];

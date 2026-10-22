@@ -1,6 +1,8 @@
-# Adds RHWind to RenderHook's building shaders (shaders\SACustomBuilding.hlsl and SACustomBuildingDN.hlsl).
+# Adds RHWind to RenderHook's building shaders (shaders\SACustomBuilding.hlsl and SACustomBuildingDN.hlsl), and names
+# the two PerMaterialBuffer fields RenderHook's own dual pass uses (shaders\Globals.hlsl).
 # Run from the game folder, or pass it: powershell -ExecutionPolicy Bypass -File install-shaders.ps1 "C:\Games\GTA SA"
-# Originals are kept as *.before_rhwind. Running it again on patched shaders does nothing.
+# Originals are kept as *.before_rhwind. Running it again changes nothing; shaders patched by RHWind 1.2-1.4 are
+# brought up to date.
 param([string]$GameDir = $PSScriptRoot)
 
 $ErrorActionPreference = 'Stop'
@@ -8,11 +10,8 @@ $shaders = Join-Path $GameDir 'shaders'
 if (-not (Test-Path (Join-Path $shaders 'SACustomBuildingDN.hlsl'))) {
     throw "No RenderHook shaders in '$shaders'. Pass the game folder as the first argument."
 }
-if (-not (Test-Path (Join-Path $shaders 'Wind.hlsli'))) {
-    $src = Join-Path $PSScriptRoot 'shaders\Wind.hlsli'
-    if (-not (Test-Path $src)) { throw "Wind.hlsli not found; copy it to '$shaders' first." }
-    Copy-Item $src $shaders
-}
+$windSrc = Join-Path $PSScriptRoot 'shaders\Wind.hlsli'
+if (-not (Test-Path $windSrc)) { throw "shaders\Wind.hlsli not found next to this script." }
 
 # Lines of inserted code, joined with the file's own line break.
 function Lines([string[]]$lines) { return $lines -join '{nl}' }
@@ -30,7 +29,7 @@ $dnEdits = @(
         '    float mip = bHasTexture != 0 ? txDiffuse.CalculateLevelOfDetail( samLinear, i.vTexCoord.xy ) : 0.0f;',
         '    if ( DualPassSkipForward( albedoSample.a, mip, i.vNormalDepth.w, i.vPosition.xy ) )',
         '        discard;',
-        '    if ( vAlphaPass.x > 0.5f )',
+        '    if ( DualPassBlendedPass() )',
         '        albedoSample.a = saturate( DualPassAlpha( albedoSample.a, mip ) );   // same coverage boost as the G-buffer part'))),
     # shadow map: plain alpha test
     @('(void ShadowPS\(PS_DEFERRED_IN i\)\s*\{\s*#if HAS_TEXTURE == 1\s*float4 outColor = txDiffuse\.Sample\(samLinear, i\.vTexCoord\.xy\);)', (Lines @(
@@ -38,7 +37,7 @@ $dnEdits = @(
         '    if ( DualPassGBuffer() )',
         '    {',
         '        // plain alpha test: dithered shadow maps make foliage self-shadowing speckled',
-        '        if ( outColor.a < vAlphaPass.y )',
+        '        if ( outColor.a < DualPassBaseCutoff() )',
         '            discard;',
         '        return;',
         '    }'))),
@@ -55,12 +54,17 @@ $dnEdits = @(
         '    else',
         '        baseColor.a = baseColor.a > 0.95f ? baseColor.a : InterleavedGradientNoise(i.vPosition.xy) * baseColor.a;')))
 )
+# Shaders patched by RHWind 1.2-1.4 read the dual-pass values from b12 only; 1.5 also takes RenderHook's own.
+$dnUpgrades = @(
+    @('    if ( vAlphaPass.x > 0.5f )', '    if ( DualPassBlendedPass() )'),
+    @('        if ( outColor.a < vAlphaPass.y )', '        if ( outColor.a < DualPassBaseCutoff() )')
+)
+# RenderHook's dual pass (UseDualPassForAlphaObjects) passes its cutoff in PerMaterialBuffer's padding; Wind.hlsli reads it.
+$globalsEdit = @('float2\s+___padding\s*:\s*packoffset\(\s*c2\s*\)\s*;', (Lines @(
+    'float  fAlphaCutoff : packoffset( c2.x );    // RenderHook dual-pass alpha objects: alpha test value, 0 = off',
+    '    float  fAlphaBlendPass : packoffset( c2.y ); // 1 in the blended pass of a dual-pass mesh')))
 
-# Patch in memory first, write only when both shaders matched.
-function Get-Patched([string]$name, [string]$color, $edits) {
-    $path = Join-Path $shaders $name
-    $text = [IO.File]::ReadAllText($path)
-    if ($text.Contains('Wind.hlsli')) { Write-Host "$name already patched"; return $null }
+function Edit-Text([string]$name, [string]$text, $edits, [string]$color) {
     $nl = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
     foreach ($e in $edits) {
         $pattern = $e[0].Replace('{color}', $color)
@@ -68,12 +72,34 @@ function Get-Patched([string]$name, [string]$color, $edits) {
         if ($count -ne 1) { throw "$name`: expected 1 match, found $count for: $pattern`nThis shader differs from the tested ones (Serendipity 1.0); nothing was changed." }
         $text = [regex]::Replace($text, $pattern, $e[1].Replace('{color}', $color).Replace('{nl}', $nl))
     }
+    return $text
+}
+
+# Patch in memory first, write only when every shader matched. Returns $null when nothing changes.
+function Get-Patched([string]$name, [string]$color, $edits, $upgrades) {
+    $path = Join-Path $shaders $name
+    $original = [IO.File]::ReadAllText($path)
+    if ($original.Contains('Wind.hlsli')) {
+        $text = $original
+        foreach ($u in $upgrades) { $text = $text.Replace($u[0], $u[1]) }
+    } else {
+        $text = Edit-Text $name $original $edits $color
+    }
+    if ($text -eq $original) { Write-Host "$name already up to date"; return $null }
     return @{ Path = $path; Text = $text }
 }
 
+function Get-PatchedGlobals {
+    $path = Join-Path $shaders 'Globals.hlsl'
+    $original = [IO.File]::ReadAllText($path)
+    if ($original.Contains('fAlphaCutoff')) { Write-Host 'Globals.hlsl already up to date'; return $null }
+    return @{ Path = $path; Text = (Edit-Text 'Globals.hlsl' $original @(, $globalsEdit) '') }
+}
+
 $patched = @(
-    (Get-Patched 'SACustomBuilding.hlsl' 'cColor' $vsEdits),
-    (Get-Patched 'SACustomBuildingDN.hlsl' 'vInColor' ($vsEdits + $dnEdits))
+    (Get-PatchedGlobals),
+    (Get-Patched 'SACustomBuilding.hlsl' 'cColor' $vsEdits @()),
+    (Get-Patched 'SACustomBuildingDN.hlsl' 'vInColor' ($vsEdits + $dnEdits) $dnUpgrades)
 )
 foreach ($p in $patched | Where-Object { $_ }) {
     $backup = "$($p.Path).before_rhwind"
@@ -81,3 +107,5 @@ foreach ($p in $patched | Where-Object { $_ }) {
     [IO.File]::WriteAllText($p.Path, $p.Text)
     Write-Host "$(Split-Path $p.Path -Leaf) patched (original kept as $(Split-Path $backup -Leaf))"
 }
+Copy-Item $windSrc $shaders -Force
+Write-Host 'Wind.hlsli installed'

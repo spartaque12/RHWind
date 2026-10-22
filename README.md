@@ -14,7 +14,11 @@ Part 2 works with any foliage, including models without wind data.
 ## Requirements
 
 - GTA San Andreas 1.0 US exe.
-- `_gtaRenderHook.asi`, build of 2021-09-11. RHWind patches fixed offsets in that binary, so other builds are not supported.
+- One of these `_gtaRenderHook.asi` builds:
+  - a build with RenderHook's plugin API (`RHSetBuildingDrawCallback`, [gtaRenderHook PR #35](https://github.com/petrgeorgievsky/gtaRenderHook/pull/35)). RHWind registers a callback and patches nothing, and the dual pass is RenderHook's own (`UseDualPassForAlphaObjects`, [PR #34](https://github.com/petrgeorgievsky/gtaRenderHook/pull/34));
+  - the 2021-09-11 release, which has no API. RHWind patches fixed offsets in that binary and draws the dual pass itself.
+
+  Any other build is detected and left untouched.
 - RenderHook's `shaders` folder. Tested with the **Serendipity 1.0** preset. The install script refuses to touch shaders that don't match and changes nothing.
 - An ASI loader.
 
@@ -25,14 +29,18 @@ Part 2 works with any foliage, including models without wind data.
    ```
    powershell -ExecutionPolicy Bypass -File install-shaders.ps1
    ```
-   It patches `shaders\SACustomBuilding.hlsl` and `shaders\SACustomBuildingDN.hlsl` and keeps the originals as `*.before_rhwind`. Running it again does nothing. You can also pass the game folder as the first argument and run it from anywhere.
-3. Keep `UseDitheringForAlphaObjects="false"` in RenderHook's `settings.xml`.
+   It patches `shaders\SACustomBuilding.hlsl`, `shaders\SACustomBuildingDN.hlsl` and `shaders\Globals.hlsl`, and keeps the originals as `*.before_rhwind`. Running it again changes nothing, and shaders patched by RHWind 1.2–1.4 are brought up to date. You can also pass the game folder as the first argument and run it from anywhere.
+3. In RenderHook's `settings.xml`, in the `<Deferred ... />` line:
+   - keep `UseDitheringForAlphaObjects="false"`;
+   - with a RenderHook that has the plugin API, add `UseDualPassForAlphaObjects="true"` (and optionally `AlphaObjectsCutoff="0.5"`). That turns on RenderHook's own dual pass. On the 2021 release this setting is ignored and RHWind's `[DualPass]` settings apply instead.
 
-`RHWind.log` next to the ASI shows what was hooked.
+`RHWind.log` next to the ASI shows what was hooked, or that it registered with RenderHook's building draw callback.
 
 **To uninstall:** delete the three files and rename the two `.before_rhwind` shaders back.
 
 ## Settings (`RHWind.ini`)
+
+The `[DualPass]` settings are for the 2021-09-11 release. With a RenderHook that has the plugin API, its own `UseDualPassForAlphaObjects` and `AlphaObjectsCutoff` take their place, and these are ignored.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -45,9 +53,9 @@ Part 2 works with any foliage, including models without wind data.
 ## How it works
 
 - **Wind flag.** The `0xEDED` atomic plugin is registered from the game's `PluginAttach`, so the flag survives model loading.
-- **Wind values.** RenderHook's building render callbacks are wrapped to fill a constant buffer (`b12`, VS and PS) per draw. It holds the object position plus a wind-direction scroll, intensity = `CWeather::Wind * 1.5 + 2`, the dual-pass parameters and the frame number.
-- **Wind weight.** It is `1 - day prelight alpha`, as in SkyGfx Extended. On those meshes the alpha is not opacity, so the shaders force it to 1.
-- **Dual pass.** A stub in RenderHook's alpha-mesh push stores per-mesh flags in the entry's padding. Dual-pass meshes are also sent to the G-buffer draw, and the forward alpha-list callback sets each mesh's own `b12`.
+- **Wind values.** A constant buffer (`b12`, VS and PS) is filled per draw. With the plugin API, RenderHook calls RHWind's callback before every building draw in every pass, including the blended pass of queued meshes; on the 2021 release, RenderHook's building render callbacks are wrapped. It holds the object position plus a wind-direction scroll, intensity = `CWeather::Wind * 1.5 + 2`, the dual-pass parameters and the frame number.
+- **Wind weight.** It is `1 - day prelight alpha`, as in SkyGfx Extended. On those meshes the alpha is not opacity, so the shaders force it to 1. With the plugin API, the callback also tells RenderHook so (`RH_DRAW_VERTEX_ALPHA_IS_NOT_OPACITY`), and RenderHook's dual pass then handles wind meshes like any other foliage.
+- **Dual pass (2021 release).** A stub in RenderHook's alpha-mesh push stores per-mesh flags in the entry's padding. Dual-pass meshes are also sent to the G-buffer draw, and the forward alpha-list callback sets each mesh's own `b12`.
 
 Source: `src/RHWind.cpp`, `src/SAProcObjLimit.cpp` and `src/RHGrass.cpp`. Build with `build.bat` (Visual Studio 2019/2022 or Build Tools, x86).
 
@@ -63,7 +71,7 @@ Install: copy `scripts\SAProcObjLimit.asi` into the game's `scripts` folder.
 
 ## Also included: RHGrass (grass under RenderHook)
 
-`scripts\RHGrass.asi` is a separate, optional plugin. RenderHook doesn't draw the game's grass at all: the call is commented out in its source. RHGrass adds it back, after RenderHook's forward pass. It needs RenderHook (same 2021-09-11 build) but not RHWind.
+`scripts\RHGrass.asi` is a separate, optional plugin. RenderHook doesn't draw the game's grass at all: the call is commented out in its source. RHGrass adds it back, after RenderHook's forward pass. It needs RenderHook (same 2021-09-11 build) but not RHWind. RenderHook builds that include [PR #32](https://github.com/petrgeorgievsky/gtaRenderHook/pull/32) draw the grass themselves; there RHGrass sees a different build and does nothing, so you don't need it.
 
 Turning the call back on isn't enough, for two reasons:
 
